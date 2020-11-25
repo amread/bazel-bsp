@@ -294,7 +294,7 @@ public class BazelBspServer implements BuildServer, ScalaBuildServer, JavaBuildS
 
   private BuildTarget getBuildTarget(Build.Rule rule) {
     String name = rule.getName();
-    System.out.println("Getting targets for rule: " + name);
+    logMessage("Getting targets for rule: " + rule + " name: " + name);
     List<BuildTargetIdentifier> deps =
         rule.getAttributeList().stream()
             .filter(attribute -> attribute.getName().equals("deps"))
@@ -400,11 +400,11 @@ public class BazelBspServer implements BuildServer, ScalaBuildServer, JavaBuildS
       buildTargetsWithBep(
           Lists.newArrayList(
               new BuildTargetIdentifier(
-                  "@io_bazel_rules_scala_scala_library//:io_bazel_rules_scala_scala_library"),
+                  "@maven//:org_scala_lang_scala_library"),
               new BuildTargetIdentifier(
-                  "@io_bazel_rules_scala_scala_reflect//:io_bazel_rules_scala_scala_reflect"),
+                  "@maven//:org_scala_lang_scala_reflect"),
               new BuildTargetIdentifier(
-                  "@io_bazel_rules_scala_scala_compiler//:io_bazel_rules_scala_scala_compiler")),
+                  "@maven//:org_scala_lang_scala_compiler")),
           Lists.newArrayList(
               "--aspects=@//.bazelbsp:aspects.bzl%scala_compiler_classpath_aspect",
               "--output_groups=scala_compiler_classpath_files"));
@@ -482,7 +482,7 @@ public class BazelBspServer implements BuildServer, ScalaBuildServer, JavaBuildS
     }
 
     if (processLock != null) processLock.get();
-    System.out.printf("Running: %s%n", argv);
+    logMessage(String.format("Running: %s\n", argv));
     processLock = new CompletableFuture<>();
     return new ProcessBuilder(argv).start();
   }
@@ -514,6 +514,8 @@ public class BazelBspServer implements BuildServer, ScalaBuildServer, JavaBuildS
 
   @Override
   public CompletableFuture<SourcesResult> buildTargetSources(SourcesParams sourcesParams) {
+    logMessage("buildTargetSources" + sourcesParams);
+
     return executeCommand(
         () -> {
           try {
@@ -524,6 +526,7 @@ public class BazelBspServer implements BuildServer, ScalaBuildServer, JavaBuildS
                     "("
                         + sourcesParams.getTargets().stream()
                             .map(BuildTargetIdentifier::getUri)
+                            .filter(tgt -> !tgt.startsWith("//frontend"))
                             .collect(Collectors.joining("+"))
                         + ")");
 
@@ -803,6 +806,7 @@ public class BazelBspServer implements BuildServer, ScalaBuildServer, JavaBuildS
     try {
       if (targetsToSources.isEmpty()) workspaceBuildTargets().wait();
 
+      logMessage(String.format("Running: %s\n", args));
       Process process = new ProcessBuilder(args).start();
       exitCode = parseProcess(process);
     } catch (InterruptedException | IOException e) {
