@@ -72,6 +72,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -368,28 +369,52 @@ public class BazelBspServer implements BuildServer, ScalaBuildServer, JavaBuildS
   }
 
   private List<Uri> getSrcsPaths(Build.Rule rule, String srcType) {
-    return rule.getAttributeList().stream()
+    Map<Boolean, List<String>> sources = rule.getAttributeList().stream()
         .filter(attribute -> attribute.getName().equals(srcType))
         .flatMap(srcsSrc -> srcsSrc.getStringListValueList().stream())
-        .flatMap(
-            dep -> {
-              if (isSourceFile(dep))
-                return Lists.newArrayList(Uri.fromFileLabel(dep, getWorkspaceRoot())).stream();
+        .collect(Collectors.partitioningBy(this::isSourceFile));
 
-              try {
-                Build.QueryResult queryResult = getQuery("query", "--output=proto", dep);
-                return queryResult.getTargetList().stream()
-                    .map(Build.Target::getRule)
-                    .flatMap(queryRule -> getSrcsPaths(queryRule, srcType).stream())
-                    .collect(Collectors.toList())
-                    .stream();
-              } catch (IOException e) {
-                return null;
-              }
-            })
-        .filter(Objects::nonNull)
-        .collect(Collectors.toList());
+        Stream<Uri> sourceFiles = sources.getOrDefault(true, Collections.emptyList()).stream()
+            .map(dep -> Uri.fromFileLabel(dep, getWorkspaceRoot()));
+
+        Stream<Uri> otherFiles = splitList(sources.getOrDefault(false, Collections.emptyList()), 20)
+            .stream()
+            .flatMap(otherDeps -> {
+                try {
+                    Build.QueryResult queryResult = getQuery("query", "--output=proto",
+                                                             "(" + otherDeps.stream().collect(Collectors.joining("+")) + ")");
+
+                    return queryResult.getTargetList().stream()
+                        .map(Build.Target::getRule)
+                        .flatMap(queryRule -> getSrcsPaths(queryRule, srcType).stream())
+                        .collect(Collectors.toList())
+                        .stream();
+                } catch (IOException e) {
+                    logMessage(String.format(e.toString()));
+                    return Stream.of();
+                }
+            });
+
+        return Stream.concat(sourceFiles, otherFiles)
+            .filter(Objects::nonNull)
+            .collect(Collectors.toList());
   }
+
+  private List<List<String>> splitList(List<String> input, int size) {
+      List<List<String>> result = new ArrayList<List<String>>();
+
+      int start = 0;
+      int end = 0;
+
+      while (end < input.size()) {
+          end = Math.min(input.size(), start + size);
+          result.add(input.subList(start, end));
+          start = end;
+      }
+
+      return result;
+  }
+
 
   private boolean isSourceFile(String dep) {
     return FILE_EXTENSIONS.stream().anyMatch(dep::endsWith) && !dep.startsWith("@");
@@ -526,7 +551,6 @@ public class BazelBspServer implements BuildServer, ScalaBuildServer, JavaBuildS
                     "("
                         + sourcesParams.getTargets().stream()
                             .map(BuildTargetIdentifier::getUri)
-                            .filter(tgt -> !tgt.startsWith("//frontend"))
                             .collect(Collectors.joining("+"))
                         + ")");
 
@@ -773,6 +797,8 @@ public class BazelBspServer implements BuildServer, ScalaBuildServer, JavaBuildS
 
   private Either<ResponseError, CompileResult> buildTargetsWithBep(
       List<BuildTargetIdentifier> targets, List<String> extraFlags) {
+    logMessage("buildTargetsWithBep targets:" + targets + " extraFlags: " + extraFlags);
+
     List<String> args = Lists.newArrayList(bazel, "build", BES_BACKEND, PUBLISH_ALL_ACTIONS);
     args.addAll(targets.stream().map(BuildTargetIdentifier::getUri).collect(Collectors.toList()));
     args.addAll(extraFlags);
@@ -844,7 +870,7 @@ public class BazelBspServer implements BuildServer, ScalaBuildServer, JavaBuildS
 
           CompileResult result = build.getRight();
           if (result.getStatusCode() != StatusCode.OK)
-            return Either.forRight(new TestResult(result.getStatusCode()));
+           return Either.forRight(new TestResult(result.getStatusCode()));
 
           try {
             Process process =
